@@ -20,7 +20,7 @@ type ViewServer struct {
 	// Your declarations here.
 	currView             View                  //  keeps track of current view
 	pingTimeMap          map[string]time.Time  //  keeps track of most recent time VS heard ping from each server
-	primaryAckedCurrView bool                  //  keeps track of whether primary has ACKed the current view
+	primaryAckedCurrView bool                  //  keeps track of whether primary has acked the current view
 	idleServer           string                //  keeps track of any idle servers
 }
 
@@ -29,30 +29,80 @@ type ViewServer struct {
 // server Ping RPC handler.
 //
 func (vs *ViewServer) Ping(args *PingArgs, reply *PingReply) error {
+
 	vs.mu.Lock()
 	defer vs.mu.Unlock()
 
-	// Your code here.	
+	// Your code here.
 
-	// 1. Update ping times for current server
-	
-	// 2. Update view and/or idle server if reboot or new server, or ACK the current view
+	vs.pingTimeMap[args.Me] = time.Now()
 
+	if args.Viewnum == 0 {
+		if "" == vs.currView.Primary && "" == vs.currView.Backup {
+			vs.changeView(args.Me, "")
+			reply.View = vs.currView
+			return nil
+		} else {
+			if vs.currView.Primary == args.Me {
+				// Primary restarted. Proceeding to a new view
+				vs.changeView(vs.currView.Backup, vs.getNewBackup())
+			} else if vs.currView.Backup == args.Me {
+				// Backup restarted. Proceeding to a new view
+				vs.changeView(vs.currView.Primary, vs.getNewBackup())
+			}
+			reply.View = vs.currView
+			return nil
+		}
+	}
+
+	if !vs.primaryAckedCurrView {
+		if args.Me == vs.currView.Primary && args.Viewnum == vs.currView.Viewnum {
+			// the proceeding view is acknowledged
+			vs.primaryAckedCurrView = true
+		}
+	}
+
+	reply.View = vs.currView
 	return nil
 }
 
 
+func (vs *ViewServer) getNewBackup() string {
+	for k := range vs.pingTimeMap {
+		if k != vs.currView.Primary && k != vs.currView.Backup {
+			return k
+		}
+	}
+	return ""
+}
+func (vs *ViewServer) newViewNum() {
+	if vs.currView.Viewnum == ^uint(0) {
+		vs.currView.Viewnum = 0
+	} else {
+		vs.currView.Viewnum++
+	}
+}
+
+func (vs *ViewServer) changeView(p string, b string) bool {
+	if vs.primaryAckedCurrView && (vs.currView.Primary != p || vs.currView.Backup != b) {
+		vs.currView.Primary = p
+		vs.currView.Backup = b
+		vs.newViewNum()
+		vs.primaryAckedCurrView = false
+		return true
+	}
+	return false
+}
 //
 // server Get() RPC handler.
 //
 func (vs *ViewServer) Get(args *GetArgs, reply *GetReply) error {
 	vs.mu.Lock()
 	defer vs.mu.Unlock()
-
 	// Your code here.	
 
 	// Add view to the reply message
-
+	reply.View = vs.currView
 	return nil
 }
 
@@ -63,17 +113,30 @@ func (vs *ViewServer) Get(args *GetArgs, reply *GetReply) error {
 // accordingly.
 //
 func (vs *ViewServer) tick() {
+
+	// Your code here.
+
 	vs.mu.Lock()
-	defer vs.mu.Unlock()	
+	defer vs.mu.Unlock()
 
-	// Your code here.	
-
-	// 1. No recent pings from the idle server
-
-	// 2. No recent pings from the backup
-
-	// 3. No recent pings from the primary
-	
+	if vs.primaryAckedCurrView {
+		for k, v := range vs.pingTimeMap {
+			if time.Since(v) > DeadPings*PingInterval {
+				delete(vs.pingTimeMap, k)
+				if k == vs.currView.Primary {
+					vs.changeView(vs.currView.Backup, vs.getNewBackup())
+				} else if k == vs.currView.Backup {
+					vs.changeView(vs.currView.Primary, vs.getNewBackup())
+				}
+			}
+		}
+		if vs.currView.Backup == "" {
+			vs.changeView(vs.currView.Primary, vs.getNewBackup())
+		}
+		if vs.currView.Primary == "" {
+			vs.changeView(vs.currView.Backup, vs.getNewBackup())
+		}
+	}
 }
 
 
@@ -107,7 +170,7 @@ func StartServer(me string) *ViewServer {
 	// Your vs.* initializations here.
 	vs.currView = View{Viewnum: 0, Primary: "", Backup: ""}
 	vs.pingTimeMap = make(map[string]time.Time)
-	vs.primaryAckedCurrView = false
+	vs.primaryAckedCurrView = true
 	vs.idleServer = ""
 
 	// tell net/rpc about our RPC server and handlers.
