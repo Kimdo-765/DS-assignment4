@@ -67,41 +67,7 @@ func (vs *ViewServer) Ping(args *PingArgs, reply *PingReply) error {
 
 	return nil
 }
-/**
-func (vs *ViewServer) Ping(args *PingArgs, reply *PingReply) error {
-	// Your code here.
-	vs.mu.Lock()
-	defer vs.mu.Unlock()
-	// log.Printf("Received ping from server %s with view num: %d", args.Me, args.Viewnum)
 
-	// log.Printf("Recording time of ping")
-	vs.pingTimeMap[args.Me] = time.Now()
-
-	switch {
-	case vs.currView.Viewnum == 0: // initial state
-		//log.Printf("Initial state 0")
-		vs.updateView(args.Me, "")
-	case vs.primaryAckedCurrView == false: // current view not yet acknowledged
-		// if this is a ping from the primary with the current view, mark the view acknowledged
-		if args.Me == vs.currView.Primary && args.Viewnum == vs.currView.Viewnum {
-			// log.Printf("Primary has acked latest view")
-			vs.primaryAckedCurrView = true
-		}
-	case args.Me != vs.currView.Primary && vs.isAlive(vs.currView.Primary) && vs.currView.Backup == "": // no backup
-		vs.updateView(vs.currView.Primary, args.Me)
-	case args.Me == vs.currView.Primary && vs.hasCrashed(args) && vs.isAlive(vs.currView.Backup):
-		nextBackup := vs.getNextServer()
-		vs.updateView(vs.currView.Backup, nextBackup)
-	case args.Me == vs.currView.Primary && vs.hasCrashed(args) && vs.currView.Backup == "": // primary has failed w/ no back up
-		fmt.Println("Primary has crashed with no backup, progress should stop")
-	}
-	// reply to server with current view
-	reply.View = vs.currView
-	//log.Printf("replying with view [%d] with primary [%s] and backup [%s]", vs.currView.Viewnum, vs.currView.Primary, vs.currView.Backup)
-
-	return nil
-}
-**/
 
 func (vs *ViewServer) hasCrashed(args *PingArgs) bool {
 	return vs.currView.Viewnum > 1 && args.Viewnum == 0
