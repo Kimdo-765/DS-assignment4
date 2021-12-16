@@ -95,13 +95,31 @@ func (pb *PBServer) Get(args *GetArgs, reply *GetReply) error {
 	defer pb.mu.Unlock()
 
 	//  1. If not the primary, send error back to client	
-
+	if pb.currView.Primary != pb.me{
+		reply.Err = ErrWrongServer
+		return nil
+	}
 	//  2. Check if we have seen this request before, and if so, return previously calculated value
-
+	
+	if IsDupGet(pb, args, reply){
+		reply.Value = pb.database[args.Key]
+		reply.Err = OK
+		return nil
+	}
 	//  3. Retrieve key from database (or return empty string if not present)	
-
+	pb.ApplyGet(args, reply)
+	
 	//  4. Propagate update to the backup server	
-
+	if pb.currView.Backup != ""{
+		ok := call(pb.currView.Backup, "PBServer.FwdGetToBackup", args, &reply)
+		if ok == true {
+			reply.Err = OK
+			pb.syncDatabase = true
+			return nil
+		}else{
+			reply.Err = ErrWrongServer
+		}
+	}
 	return nil
 }
 
@@ -165,14 +183,30 @@ func (pb *PBServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) error 
 	pb.mu.Lock()
 	defer pb.mu.Unlock()
 
+
 	//  1. If not the primary, send error back to client
-	
+	if pb.currView.Primary != pb.me{
+		reply.Err = ErrWrongServer
+		return nil
+	}
 	//  2. Check if we have seen this request before
-
+	if IsDupPutAppend(pb, args, reply){
+		reply.Err = OK
+		return nil
+	}
 	//  3. Update database
-
-	//  4. Propagate update to the backup server
-
+	pb.ApplyPutAppend(args, reply)
+	//  4. Propagate update to the backup server	
+	if pb.currView.Backup != ""{
+		ok := call(pb.currView.Backup, "PBServer.FwdPutAppendToBackup", args, &reply)
+		if ok == true {
+			reply.Err = OK
+			pb.syncDatabase = true
+			return nil
+		}else{
+			reply.Err = ErrWrongServer
+		}
+	}
 	return nil
 }
 
@@ -212,12 +246,26 @@ func (pb *PBServer) tick() {
 	defer pb.mu.Unlock()
 
 	//  1. Ping viewservice for current view
-	
+	newView, err := pb.vs.Ping(pb.currView.Viewnum)
+	if err != nil {
+		fmt.Errorf("Ping(%v) failed", pb.currView.Viewnum)
+	}
 	//  2. Backup added to view, primary should send it's complete k/v database
-
+	if pb.me == newView.Primary || pb.currView.Backup != newView.Backup && newView.Backup != ""{
+		pb.syncDatabase = true
+	}
 	//  3. Sync primary and backup databases (for complete DB transfer AND Get/Put/Append RPC requests)
-	
+	if pb.syncDatabase == true {
+		args := FwdDatabaseToBackupArgs{pb.database, pb.prevRequests}
+		reply := FwdDatabaseToBackupReply{}
+		ok := call(pb.currView.Backup, "PBServer.FwdDatabaseToBackup", args, &reply)
+		if ok{
+			pb.syncDatabase = false
+		}
+	}
+
 	//  4. Update current view
+	pb.currView = newView
 }
 
 

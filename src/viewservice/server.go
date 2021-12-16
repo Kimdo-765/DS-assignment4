@@ -20,8 +20,7 @@ type ViewServer struct {
 	// Your declarations here.
 	currView             View                  //  keeps track of current view
 	pingTimeMap          map[string]time.Time  //  keeps track of most recent time VS heard ping from each server
-	primaryAckedCurrView bool                  //  keeps track of whether primary has acked the current view
-	idleServer           string                //  keeps track of any idle servers
+	primaryAckedCurrView bool                  //  keeps track of whether primary has ACKed the current view
 }
 
 
@@ -29,76 +28,80 @@ type ViewServer struct {
 // server Ping RPC handler.
 //
 func (vs *ViewServer) Ping(args *PingArgs, reply *PingReply) error {
-
 	vs.mu.Lock()
 	defer vs.mu.Unlock()
 
-	// Your code here.
+	// Your code here.	
+
+	// 1. Update ping times for current server
+	
+	// 2. Update view and/or idle server if reboot or new server, or ACK the current view
 
 	vs.pingTimeMap[args.Me] = time.Now()
-
-	if args.Viewnum == 0 {
-		if "" == vs.currView.Primary && "" == vs.currView.Backup {
-			vs.changeView(args.Me, "")
-			reply.View = vs.currView
-			return nil
-		} else {
-			if vs.currView.Primary == args.Me {
-				// Primary restarted. Proceeding to a new view
-				vs.changeView(vs.currView.Backup, vs.getNewBackup())
-			} else if vs.currView.Backup == args.Me {
-				// Backup restarted. Proceeding to a new view
-				vs.changeView(vs.currView.Primary, vs.getNewBackup())
-			}
-			reply.View = vs.currView
-			return nil
-		}
+	if vs.currView.Viewnum == 0 { //initiate
+		vs.updateView(args.Me, "")
 	}
-
-	if !vs.primaryAckedCurrView {
+	if vs.primaryAckedCurrView == false { //primary에 의해 승인되지 않은 view일경우
 		if args.Me == vs.currView.Primary && args.Viewnum == vs.currView.Viewnum {
-			// the proceeding view is acknowledged
-			vs.primaryAckedCurrView = true
+			vs.primaryAckedCurrView  = true
 		}
 	}
 
+	if args.Me == vs.currView.Primary {//메시지를 primary가 보냈는지
+		if vs.hasCrashed(args) { //고장
+			if vs.currView.Backup !=  "" { //backup이 있는지
+				if vs.isAlive(vs.currView.Backup) { //Backup이 응답하는지
+					nextBackup := vs.getNextServer()
+					vs.updateView(vs.currView.Backup, nextBackup)
+				}
+			} else { // 고장인데 backup이 없음 => critical error
+				return nil
+			}
+		}
+	} else if args.Me != vs.currView.Backup { // backup이 아닌 idle일 경우
+		if vs.isAlive(vs.currView.Primary) && vs.currView.Backup == ""{ //Primary는 살아있는데 Backup이 없을 경우
+			vs.updateView(vs.currView.Primary, args.Me)
+		}
+	}
 	reply.View = vs.currView
+
 	return nil
 }
 
+func (vs *ViewServer) hasCrashed(args *PingArgs) bool {
+	return vs.currView.Viewnum > 1 && args.Viewnum == 0
+}
 
-func (vs *ViewServer) getNewBackup() string {
-	for k := range vs.pingTimeMap {
-		if k != vs.currView.Primary && k != vs.currView.Backup {
-			return k
+func (vs *ViewServer) isAlive(name string) bool {
+	pingTime := vs.pingTimeMap[name]
+
+	now := time.Now()
+	return now.Sub(pingTime) < PingInterval * DeadPings
+}
+
+func (vs *ViewServer) getNextServer() string {
+	for next := range vs.pingTimeMap {
+		if vs.isAlive(next) && next != vs.currView.Primary && next != vs.currView.Backup {
+			return next
 		}
 	}
 	return ""
 }
-func (vs *ViewServer) newViewNum() {
-	if vs.currView.Viewnum == ^uint(0) {
-		vs.currView.Viewnum = 0
-	} else {
-		vs.currView.Viewnum++
-	}
+
+func (vs *ViewServer) updateView(primary string, backup string) { // view change
+	// log.Printf("updating to view {%d, %s, %s}", vs.currView.Viewnum + 1, primary, backup)
+	vs.currView = View{vs.currView.Viewnum + 1, primary, backup}
+	vs.primaryAckedCurrView = false
 }
 
-func (vs *ViewServer) changeView(p string, b string) bool {
-	if vs.primaryAckedCurrView && (vs.currView.Primary != p || vs.currView.Backup != b) {
-		vs.currView.Primary = p
-		vs.currView.Backup = b
-		vs.newViewNum()
-		vs.primaryAckedCurrView = false
-		return true
-	}
-	return false
-}
+
 //
 // server Get() RPC handler.
 //
 func (vs *ViewServer) Get(args *GetArgs, reply *GetReply) error {
 	vs.mu.Lock()
 	defer vs.mu.Unlock()
+
 	// Your code here.	
 
 	// Add view to the reply message
@@ -113,28 +116,40 @@ func (vs *ViewServer) Get(args *GetArgs, reply *GetReply) error {
 // accordingly.
 //
 func (vs *ViewServer) tick() {
-
-	// Your code here.
-
 	vs.mu.Lock()
-	defer vs.mu.Unlock()
+	defer vs.mu.Unlock()	
 
-	if vs.primaryAckedCurrView {
-		for k, v := range vs.pingTimeMap {
-			if time.Since(v) > DeadPings*PingInterval {
-				delete(vs.pingTimeMap, k)
-				if k == vs.currView.Primary {
-					vs.changeView(vs.currView.Backup, vs.getNewBackup())
-				} else if k == vs.currView.Backup {
-					vs.changeView(vs.currView.Primary, vs.getNewBackup())
+	// Your code here.	
+
+	// 1. No recent pings from the idle server
+
+	// 2. No recent pings from the backup
+
+	// 3. No recent pings from the primary
+	if vs.primaryAckedCurrView == true {
+		if vs.isAlive(vs.currView.Primary){ //primary가 활성화되어있을때
+			if vs.currView.Backup == ""{ //backup은 없을때
+				nextBackup := vs.getNextServer()
+				if nextBackup != "" { //다음 서버가 있다면
+					vs.updateView(vs.currView.Primary, nextBackup) //그 서버를 backup으로 업데이트
+				}
+			} else { //backup이 있을때
+				if !vs.isAlive(vs.currView.Backup) {//backup이 죽었으면
+					nextBackup := vs.getNextServer()
+					vs.updateView(vs.currView.Primary, nextBackup) //다음서버로 backup설정
 				}
 			}
-		}
-		if vs.currView.Backup == "" {
-			vs.changeView(vs.currView.Primary, vs.getNewBackup())
-		}
-		if vs.currView.Primary == "" {
-			vs.changeView(vs.currView.Backup, vs.getNewBackup())
+		} else { //primary가 죽었을때
+			if vs.currView.Backup == ""{//backup이 없다면
+				return // critical
+			} else {
+				if vs.isAlive(vs.currView.Backup) { // backup이 활성화
+					nextBackup := vs.getNextServer()
+					vs.updateView(vs.currView.Backup, nextBackup) //backup을 primary 다음서버를 backup으로
+				} else {
+					return // critical
+				}
+			}
 		}
 	}
 }
@@ -170,8 +185,7 @@ func StartServer(me string) *ViewServer {
 	// Your vs.* initializations here.
 	vs.currView = View{Viewnum: 0, Primary: "", Backup: ""}
 	vs.pingTimeMap = make(map[string]time.Time)
-	vs.primaryAckedCurrView = true
-	vs.idleServer = ""
+	vs.primaryAckedCurrView = false
 
 	// tell net/rpc about our RPC server and handlers.
 	rpcs := rpc.NewServer()

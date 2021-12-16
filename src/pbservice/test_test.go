@@ -116,6 +116,8 @@ func TestBasicFail(t *testing.T) {
 	t2 := time.Now()
 	dt := t2.Sub(t1)
 	allowed := 2 * (dt / (100 * time.Millisecond)) // two servers tick()ing 10/second
+	fmt.Printf("%d\n", int(allowed)+20)
+	fmt.Printf("%d\n", count2-count1)
 	if (count2 - count1) > int(allowed)+20 {
 		t.Fatal("too many viewserver RPCs")
 	}

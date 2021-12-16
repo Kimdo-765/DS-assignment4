@@ -3,7 +3,7 @@ package pbservice
 import "viewservice"
 import "net/rpc"
 import "fmt"
-
+import "time"
 import "crypto/rand"
 import "math/big"
 
@@ -30,7 +30,6 @@ func MakeClerk(vshost string, me string) *Clerk {
 	ck.vs = viewservice.MakeClerk(me, vshost)
 	// Your ck.* initializations here
 	ck.currView, _ = ck.vs.Get()
-
 	return ck
 }
 
@@ -86,8 +85,20 @@ func (ck *Clerk) Get(key string) string {
 	
 
 	//  3. Keep retrying until we get an answer	
-
-	return ""
+	reqNum := nrand()
+    args := &GetArgs{}
+    args.Key = key
+	args.Id = reqNum
+    var reply GetReply
+	ok := call(ck.vs.Primary(), "PBServer.Get", args, &reply)
+    for ok == false && reply.Err != OK {
+		time.Sleep(viewservice.PingInterval)
+		ok = call(ck.vs.Primary(), "PBServer.PutAppend", args, &reply)
+	}
+	if reply.Err == ErrNoKey{
+		return ""
+	}
+	return reply.Value
 }
 
 
@@ -102,7 +113,19 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 	//  2. Send an RPC request, wait for the reply
 
 	//  3. Keep retrying until we get an answer
-	
+	reqNum := nrand()
+    args := &PutAppendArgs{}
+    args.Key = key
+    args.Value = value
+    args.Op = op
+    args.Id = reqNum
+    var reply PutAppendReply
+	ok := call(ck.vs.Primary(), "PBServer.PutAppend", args, &reply)
+    for ok == false && reply.Err != OK {
+		time.Sleep(viewservice.PingInterval)
+		ok = call(ck.vs.Primary(), "PBServer.PutAppend", args, &reply)
+	}
+    return
 }
 
 
