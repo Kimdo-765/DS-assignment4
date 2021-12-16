@@ -38,16 +38,6 @@ type GetReply struct {
 	Value string
 }
 
-type SyncDataArgs struct {
-    Data map[string]string
-    Requests []int64
-}
-
-type SyncDataReply struct {
-    Err Err
-}
-
-
 
 // Your RPC definitions here.
 

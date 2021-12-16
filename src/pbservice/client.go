@@ -12,7 +12,7 @@ type Clerk struct {
 	vs       *viewservice.Clerk
 	
 	// Your declarations here
-	currView viewservice.View  //  Keeps track of the current view
+	currView *viewservice.View  //  Keeps track of the current view
 }
 
 
@@ -29,7 +29,8 @@ func MakeClerk(vshost string, me string) *Clerk {
 	ck := new(Clerk)
 	ck.vs = viewservice.MakeClerk(me, vshost)
 	// Your ck.* initializations here
-	ck.currView, _ = ck.vs.Get()
+	view, _ := ck.vs.Get()
+	ck.currView = &view
 	return ck
 }
 
@@ -85,20 +86,25 @@ func (ck *Clerk) Get(key string) string {
 	
 
 	//  3. Keep retrying until we get an answer	
-	reqNum := nrand()
-    args := &GetArgs{}
-    args.Key = key
-	args.Id = reqNum
-    var reply GetReply
-	ok := call(ck.vs.Primary(), "PBServer.Get", args, &reply)
-    for ok == false && reply.Err != OK {
+	for {
+		if ck.currView == nil {
+			view, ok := ck.vs.Get()
+			if !ok {
+				fmt.Printf("Viewservice get failed\n")
+				return ""
+			}
+			ck.currView = &view
+		}
+		args := &GetArgs{}
+		args.Key = key
+		var reply GetReply
+		ok := call(ck.currView.Primary, "PBServer.Get", args, &reply)
+		if ok && reply.Err == OK{
+			return reply.Value
+		}
+		ck.currView = nil
 		time.Sleep(viewservice.PingInterval)
-		ok = call(ck.vs.Primary(), "PBServer.PutAppend", args, &reply)
 	}
-	if reply.Err == ErrNoKey{
-		return ""
-	}
-	return reply.Value
 }
 
 
@@ -114,18 +120,28 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 
 	//  3. Keep retrying until we get an answer
 	reqNum := nrand()
-    args := &PutAppendArgs{}
-    args.Key = key
-    args.Value = value
-    args.Op = op
-    args.Id = reqNum
-    var reply PutAppendReply
-	ok := call(ck.vs.Primary(), "PBServer.PutAppend", args, &reply)
-    for ok == false && reply.Err != OK {
+	for {
+		if ck.currView == nil {
+			view, ok := ck.vs.Get()
+			if !ok {
+				fmt.Printf("Viewservice get failed\n")
+				return
+			}
+			ck.currView = &view
+		}
+		args := &PutAppendArgs{}
+		args.Key = key
+		args.Value = value
+		args.Op = op
+		args.Id = reqNum
+		var reply PutAppendReply
+		ok := call(ck.currView.Primary, "PBServer.PutAppend", args, &reply)
+		if ok && reply.Err == OK {
+			return
+		}
+		ck.currView = nil
 		time.Sleep(viewservice.PingInterval)
-		ok = call(ck.vs.Primary(), "PBServer.PutAppend", args, &reply)
 	}
-    return
 }
 
 

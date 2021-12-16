@@ -47,18 +47,18 @@ func (vs *ViewServer) Ping(args *PingArgs, reply *PingReply) error {
 		}
 	}
 
-	if args.Me == vs.currView.Primary {//메시지를 primary가 보냈는지
+	if args.Me == vs.currView.Primary {//primary 일때
 		if vs.hasCrashed(args) { //고장
 			if vs.currView.Backup !=  "" { //backup이 있는지
-				if vs.isAlive(vs.currView.Backup) { //Backup이 응답하는지
+				if vs.isAlive(vs.currView.Backup) { //Backup이 살아있는지
 					nextBackup := vs.getNextServer()
-					vs.updateView(vs.currView.Backup, nextBackup)
+					vs.updateView(vs.currView.Backup, nextBackup) //Backup을 primary로, 다음서버를 backup으로
 				}
 			} else { // 고장인데 backup이 없음 => critical error
 				return nil
 			}
 		}
-	} else if args.Me != vs.currView.Backup { // backup이 아닌 idle일 경우
+	} else if args.Me != vs.currView.Backup { // backup이 아닌 idle일때
 		if vs.isAlive(vs.currView.Primary) && vs.currView.Backup == ""{ //Primary는 살아있는데 Backup이 없을 경우
 			vs.updateView(vs.currView.Primary, args.Me)
 		}
@@ -67,6 +67,41 @@ func (vs *ViewServer) Ping(args *PingArgs, reply *PingReply) error {
 
 	return nil
 }
+/**
+func (vs *ViewServer) Ping(args *PingArgs, reply *PingReply) error {
+	// Your code here.
+	vs.mu.Lock()
+	defer vs.mu.Unlock()
+	// log.Printf("Received ping from server %s with view num: %d", args.Me, args.Viewnum)
+
+	// log.Printf("Recording time of ping")
+	vs.pingTimeMap[args.Me] = time.Now()
+
+	switch {
+	case vs.currView.Viewnum == 0: // initial state
+		//log.Printf("Initial state 0")
+		vs.updateView(args.Me, "")
+	case vs.primaryAckedCurrView == false: // current view not yet acknowledged
+		// if this is a ping from the primary with the current view, mark the view acknowledged
+		if args.Me == vs.currView.Primary && args.Viewnum == vs.currView.Viewnum {
+			// log.Printf("Primary has acked latest view")
+			vs.primaryAckedCurrView = true
+		}
+	case args.Me != vs.currView.Primary && vs.isAlive(vs.currView.Primary) && vs.currView.Backup == "": // no backup
+		vs.updateView(vs.currView.Primary, args.Me)
+	case args.Me == vs.currView.Primary && vs.hasCrashed(args) && vs.isAlive(vs.currView.Backup):
+		nextBackup := vs.getNextServer()
+		vs.updateView(vs.currView.Backup, nextBackup)
+	case args.Me == vs.currView.Primary && vs.hasCrashed(args) && vs.currView.Backup == "": // primary has failed w/ no back up
+		fmt.Println("Primary has crashed with no backup, progress should stop")
+	}
+	// reply to server with current view
+	reply.View = vs.currView
+	//log.Printf("replying with view [%d] with primary [%s] and backup [%s]", vs.currView.Viewnum, vs.currView.Primary, vs.currView.Backup)
+
+	return nil
+}
+**/
 
 func (vs *ViewServer) hasCrashed(args *PingArgs) bool {
 	return vs.currView.Viewnum > 1 && args.Viewnum == 0
@@ -115,6 +150,7 @@ func (vs *ViewServer) Get(args *GetArgs, reply *GetReply) error {
 // if servers have died or recovered, and change the view
 // accordingly.
 //
+
 func (vs *ViewServer) tick() {
 	vs.mu.Lock()
 	defer vs.mu.Unlock()	
@@ -126,6 +162,7 @@ func (vs *ViewServer) tick() {
 	// 2. No recent pings from the backup
 
 	// 3. No recent pings from the primary
+	
 	if vs.primaryAckedCurrView == true {
 		if vs.isAlive(vs.currView.Primary){ //primary가 활성화되어있을때
 			if vs.currView.Backup == ""{ //backup은 없을때
@@ -153,7 +190,6 @@ func (vs *ViewServer) tick() {
 		}
 	}
 }
-
 
 //
 // tell the server to shut itself down.
